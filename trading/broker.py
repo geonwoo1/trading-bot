@@ -23,7 +23,6 @@ class KisBroker:
         headers = {"authorization": f"Bearer {self.access_token}", "appKey": self.app_key, "appSecret": self.app_secret, "tr_id": "FHKST03010100"}
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
         res = requests.get(f"{self.url}/{path}", params=params, headers=headers)
-        # 데이터를 리스트로 변환 (최신순으로 사용하기 위해 순서 뒤집기)
         data = res.json().get('output2', [])
         return [{"close": int(item['stck_clpr'])} for item in reversed(data)]
 

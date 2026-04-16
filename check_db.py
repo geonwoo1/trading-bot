@@ -55,5 +55,31 @@ def check_data():
     print(ticker_data)
     
     conn.close()
+def check_analysis_reports():
+    """AI가 분석한 리포트 최근 5개 확인"""
+    conn = sqlite3.connect('trading.db')
+    print("\n=== 최근 AI 분석 리포트 (최근 5건) ===")
+    try:
+        query = "SELECT ticker, analysis_date, close, rsi FROM analysis_reports ORDER BY analysis_date DESC LIMIT 5;"
+        df = pd.read_sql(query, conn)
+        print(df)
+    except Exception as e:
+        print(f"분석 리포트 확인 실패: {e}")
+    conn.close()
+
+def check_trade_history():
+    """실제 매매 기록 확인"""
+    conn = sqlite3.connect('trading.db')
+    print("\n=== 실제 매매 내역 확인 ===")
+    try:
+        query = "SELECT * FROM trade_history ORDER BY trade_date DESC;"
+        df = pd.read_sql(query, conn)
+        if df.empty:
+            print("아직 체결된 거래가 없습니다.")
+        else:
+            print(df)
+    except Exception as e:
+        print(f"매매 내역 확인 실패: {e}")
+    conn.close()
 if __name__ == "__main__":
-    check_my_db()
+    check_analysis_reports()
