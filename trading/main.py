@@ -8,7 +8,8 @@ import pandas as pd
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-def get_gemini_analysis(ticker, current, context ='매수 고려중'):
+def get_gemini_analysis(ticker, current, context='매수 고려중'):
+    # AI 분석을 위한 프롬프트 정의
     prompt = f"""
     당신은 10년 차 베테랑 증권사 애널리스트입니다. '{ticker}' 종목을 분석해주세요.
     현재 투자자의 상태는 '{context}'입니다.
@@ -28,10 +29,38 @@ def get_gemini_analysis(ticker, current, context ='매수 고려중'):
 
     답변은 투자자가 바로 이해할 수 있도록 간결하고 전문적인 톤으로 작성해주세요.
     """
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt,
-        config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
-    return response.text
 
+    # 재시도 로직 적용 (최대 3번)
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash", # gemini-2.5-flash 대신 안정적인 2.0 권장
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())]
+                )
+            )
+            return response.text
+        
+        except Exception as e:
+            error_msg = str(e)
+            
+            # 서버 과부하(503) 발생 시
+            if "503" in error_msg:
+                print(f"[!] 서버 과부하 발생 (503). {attempt+1}번째 재시도 중... 30초 대기")
+                time.sleep(30)
+            
+            # 할당량 초과(429) 발생 시
+            elif "429" in error_msg:
+                print(f"[!] 할당량 초과 (429). 대기 필요. 60초 대기...")
+                time.sleep(60)
+            
+            # 그 외의 에러
+            else:
+                print(f"[!] 분석 중 에러 발생 ({ticker}): {error_msg}")
+                break 
+
+    return "[SCORE: 0] 분석 실패"
 def main():
     db = DBManager()
     broker = KisBroker()
@@ -60,7 +89,7 @@ def main():
             print(f"   ! 포착: {ticker} (RSI: {current['rsi']:.2f})")
     
     # 상위 50개 분석
-    top_50 = sorted(analyzed_list, key=lambda x: x['data']['rsi'])[:50]
+    top_50 = sorted(analyzed_list, key=lambda x: x['data']['rsi'])[:5]
     print(f"\n[심층 분석 시작] 상위 {len(top_50)}개 AI 분석 진행")
     
     for i, item in enumerate(top_50):
