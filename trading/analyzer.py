@@ -1,86 +1,116 @@
-import os
 import sqlite3
+import pandas as pd
+import os
 import time
-import google.generativeai as genai
+from datetime import datetime
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
-from serpapi import GoogleSearch
 
-# 1. 환경 설정
+# 환경변수 로드
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# SerpApi 키 (없다면 SERPAPI_API_KEY를 .env에 추가하세요)
-SERPAPI_KEY = os.getenv("SERPAPI_API_KEY")
+# DB 경로 설정 (상위 폴더에 있는 trading.db)
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'trading.db')
 
-# 2. 모델 설정 (사용 가능한 모델 자동 선택)
-def get_model():
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            return genai.GenerativeModel(m.name)
-    return None
-
-model = get_model()
-
-# 3. 뉴스 가져오기 (SerpApi 사용)
-def fetch_news(ticker_name):
-    params = {
-        "engine": "google",
-        "q": f"{ticker_name} 주식 뉴스",
-        "tbm": "nws",
-        "api_key": SERPAPI_KEY
-    }
-    search = GoogleSearch(params)
-    results = search.get_dict()
+def calculate_rsi(series, period=14):
+    """표준 RSI 계산 (직접 구현)"""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
     
-    news_titles = [item['title'] for item in results.get('news_results', [])]
-    return news_titles[:3]
+    # Wilder's Smoothing 적용
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
-# 4. AI 점수 산출
-def get_ai_score(ticker, news_list):
-    news_text = "\n".join(news_list)
+def get_analysis_data(ticker):
+    """DB에서 데이터를 가져와 RSI 계산"""
+    conn = sqlite3.connect(DB_PATH)
+    query = f"SELECT date, close FROM daily_prices WHERE ticker = '{ticker}'"
+    df = pd.read_sql(query, conn)
+    conn.close()
     
-    print(f"\n--- [뉴스 분석] {ticker} ---")
-    for i, title in enumerate(news_list, 1):
-        print(f"{i}. {title}")
+    if df.empty: return None
     
-    prompt = f"종목({ticker}) 향후 주가 상승 가능성 0~100점 사이 숫자만 답변. 뉴스: {news_text}"
-    response = model.generate_content(prompt)
+    df['date'] = pd.to_datetime(df['date'], format='mixed')
+    df = df.sort_values('date')
+    df['close'] = pd.to_numeric(df['close'])
+    df['rsi'] = calculate_rsi(df['close'], period=14)
     
+    return df.iloc[-1] # 마지막 행 데이터
+
+def get_gemini_analysis(ticker, data):
+    """Gemini API 호출 (뉴스 검색 포함)"""
+    prompt = f"""
+    당신은 10년 차 베테랑 증권사 애널리스트입니다. '{ticker}' 종목을 분석해주세요.
+    - 현재가: {data['close']:,}원
+    - RSI(14): {data['rsi']:.2f}
+    
+    [분석 요청]
+    1. RSI 수치 기반 기술적 판단.
+    2. 최근 1주일간 뉴스 검색 후 종합 투자 의견 제시.
+    3. 최종 점수 [SCORE: 0~100] 명시.
+    """
     try:
-        score = int(response.text.strip())
-        print(f"-> 분석 결과: {score}점")
-        return score
-    except:
-        return 50
+        config = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.3,
+        )
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=config
+        )
+        return response.text
+    except Exception as e:
+        return f"분석 중 에러 발생: {e}"
 
-# 5. 메인 로직
-def run_analysis():
-    print("분석을 시작합니다...")
-    conn = sqlite3.connect('../trading.db')
+def save_analysis_to_db(ticker, data, report):
+    """분석 결과 저장"""
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    # 예시 티커 (실제 데이터 로직에 맞춰 변경)
-    ticker = "000815"
-    signal = "BUY"  # 테스트용 강제 신호
-    
-    if signal == "BUY":
-        print(f"매수 신호 포착: {ticker}")
-        news_list = fetch_news(ticker)
-        news_score = get_ai_score(ticker, news_list)
-        
-        # 임시 점수 계산
-        chart_score = 80 
-        final_score = (chart_score + news_score) / 2
-        
-        cursor.execute("""
-            INSERT INTO stock_scores (ticker, date, chart_score, news_score, final_score)
-            VALUES (?, DATE('now'), ?, ?, ?)
-        """, (ticker, chart_score, news_score, final_score))
-        
-        conn.commit()
-        print("저장 완료 -> 전체 분석 및 DB 저장 완료!")
-    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS analysis_reports (
+            ticker TEXT, analysis_date TEXT, close INTEGER, rsi REAL, report TEXT,
+            PRIMARY KEY (ticker, analysis_date)
+        )
+    ''')
+    cursor.execute('''
+        INSERT OR REPLACE INTO analysis_reports (ticker, analysis_date, close, rsi, report)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (ticker, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), int(data['close']), float(data['rsi']), report))
+    conn.commit()
     conn.close()
 
 if __name__ == "__main__":
-    run_analysis()
+    # 1. 대상 종목 가져오기
+    conn = sqlite3.connect(DB_PATH)
+    tickers = [row[0] for row in conn.execute("SELECT Code FROM my_watchlist").fetchall()]
+    conn.close()
+
+    print(f"총 {len(tickers)}개 종목 RSI 계산 시작...")
+    
+    rsi_list = []
+    for ticker in tickers:
+        data = get_analysis_data(ticker)
+        if data is not None and not pd.isna(data['rsi']):
+            rsi_list.append({'ticker': ticker, 'data': data, 'rsi': data['rsi']})
+
+    # 2. 과매도 기준 RSI 낮은 순 상위 10개 추출
+    top_10 = sorted(rsi_list, key=lambda x: x['rsi'])[:10]
+
+    # 3. AI 분석 및 DB 저장
+    print(f"상위 10개 종목 AI 심층 분석 시작...")
+    for item in top_10:
+        print(f"분석 중: {item['ticker']} (RSI: {item['rsi']:.2f})")
+        report = get_gemini_analysis(item['ticker'], item['data'])
+        save_analysis_to_db(item['ticker'], item['data'], report)
+        
+        # API 할당량 보호를 위한 강제 대기 (분당 3회 제한)
+        time.sleep(20) 
+    
+    print("모든 작업이 완료되었습니다.")

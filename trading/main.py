@@ -1,55 +1,67 @@
+import time
+import pandas as pd
+from google import genai
 from db_manager import DBManager
 from broker import KisBroker
-from analyzer import TechnicalAnalyzer
-import time
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+def calculate_rsi(price_list, period=14):
+    df = pd.DataFrame(price_list)
+    delta = df['close'].diff()
+    avg_gain = delta.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def get_gemini_analysis(ticker, data):
+    """Gemini API 호출 (뉴스 검색 포함)"""
+    prompt = f"""
+    당신은 10년 차 베테랑 증권사 애널리스트입니다. '{ticker}' 종목을 분석해주세요.
+    - 현재가: {data['close']:,}원
+    - RSI(14): {data['rsi']:.2f}
+    
+    [분석 요청]
+    1. RSI 수치 기반 기술적 판단.
+    2. 최근 1주일간 뉴스 검색 후 종합 투자 의견 제시.
+    3. 최종 점수 [SCORE: 0~100] 명시.
+    """
+    try:
+        config = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.3,
+        )
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=config
+        )
+        return response.text
+    except Exception as e:
+        return f"분석 중 에러 발생: {e}"
 
 def main():
     db = DBManager()
-    broker = KisBroker(db_manager=db)
+    broker = KisBroker()
     
-    ticker = "005930"  # 삼성전자
-    name = "삼성전자"
-    
-    print(f"=== [{name}] 분석 파이프라인 시작 ===")
-    
-    # 1. 잔고 동기화
-    print("1. 계좌 잔고 동기화 중...")
-    broker.sync_data()
-    
-    # 2. 과거 시세 데이터 수집 (API 호출)
-    print(f"2. {name} 과거 시세 API 요청 중...")
-    price_data = broker.get_daily_ohlcv(ticker)
-    
-    # [중요] API가 데이터를 줬는지 확인
-    if not price_data:
-        print("!!! 위기: API로부터 받은 데이터가 0건입니다. (API 응답 확인 필요) !!!")
-        return
-
-    print(f"   -> API 수집 성공: {len(price_data)}건의 데이터를 받았습니다.")
-
-    # 3. 데이터 DB 적재
-    print("3. DB에 시세 데이터 적재 중...")
-    db.save_prices(ticker, price_data)
-    
-    # 4. 분석을 위해 DB에서 데이터 다시 로드
-    print("4. 분석용 데이터 로드 및 지표 계산 중...")
-    df = db.get_prices_as_df(ticker)
-    
-    # 데이터 유효성 최종 확인
-    if len(df) >= 20:
-        df = TechnicalAnalyzer.add_indicators(df)
-        signal = TechnicalAnalyzer.get_signal(df)
+    for ticker in db.get_watchlist():
+        ohlcv = broker.get_daily_ohlcv(ticker)
+        if not ohlcv: continue
         
-        print("\n" + "="*40)
-        print(f" 종목명: {name} ({ticker})")
-        print(f" 분석일: {df.iloc[-1]['date']}")
-        print(f" 현재가: {df.iloc[-1]['close']:,}원")
-        print(f" RSI 지표: {df.iloc[-1]['rsi']:.2f}")
-        print(f" 최종 신호: {signal}")
-        print("="*40)
-    else:
-        print(f"\n[실패] DB 데이터가 부족합니다. (현재 DB 내 데이터: {len(df)}일치)")
-        print("Tip: db_manager.py의 save_prices 함수가 제대로 작동하는지 확인하세요.")
+        rsi = calculate_rsi(ohlcv)
+        if rsi < 35: # 과매도 종목 필터링
+            print(f"포착: {ticker} (RSI: {rsi:.2f})")
+            report = get_gemini_analysis(ticker, {'close': ohlcv[-1]['close'], 'rsi': rsi})
+            
+            if "[DECISION: BUY]" in report:
+                print(f"매수 실행: {ticker}")
+                broker.buy_market_order(ticker, 1) # 1주 매수
+                db.save_analysis(ticker, {'close': ohlcv[-1]['close'], 'rsi': rsi}, report)
+            
+            time.sleep(20) # API 호출 제한 준수
 
 if __name__ == "__main__":
     main()
