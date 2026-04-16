@@ -19,12 +19,20 @@ class KisBroker:
         return res.json().get('access_token')
 
     def get_daily_ohlcv(self, ticker):
-        path = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
-        headers = {"authorization": f"Bearer {self.access_token}", "appKey": self.app_key, "appSecret": self.app_secret, "tr_id": "FHKST03010100"}
-        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
-        res = requests.get(f"{self.url}/{path}", params=params, headers=headers)
-        data = res.json().get('output2', [])
-        return [{"close": int(item['stck_clpr'])} for item in reversed(data)]
+            path = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+            headers = {"authorization": f"Bearer {self.access_token}", "appKey": self.app_key, "appSecret": self.app_secret, "tr_id": "FHKST03010100"}
+            params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker, "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "1"}
+            
+            # 재시도 로직 추가
+            for attempt in range(3): # 최대 3번 시도
+                try:
+                    res = requests.get(f"{self.url}/{path}", params=params, headers=headers)
+                    data = res.json().get('output2', [])
+                    return [{"close": int(item['stck_clpr'])} for item in reversed(data)]
+                except Exception as e:
+                    print(f"[!] 연결 끊김 발생. 5초 대기 후 재시도... ({attempt+1}/3)")
+                    time.sleep(5) 
+            return []
 
     def buy_market_order(self, ticker, qty):
         path = "/uapi/domestic-stock/v1/trading/order-cash"

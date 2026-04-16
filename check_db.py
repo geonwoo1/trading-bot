@@ -60,7 +60,7 @@ def check_analysis_reports():
     conn = sqlite3.connect('trading.db')
     print("\n=== 최근 AI 분석 리포트 (최근 5건) ===")
     try:
-        query = "SELECT ticker, analysis_date, close, rsi FROM analysis_reports ORDER BY analysis_date DESC LIMIT 5;"
+        query = "SELECT * FROM analysis_reports ORDER BY analysis_date DESC LIMIT 5;"
         df = pd.read_sql(query, conn)
         print(df)
     except Exception as e:
@@ -81,5 +81,15 @@ def check_trade_history():
     except Exception as e:
         print(f"매매 내역 확인 실패: {e}")
     conn.close()
+def check_table_schema():
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(analysis_reports);")
+    columns = cursor.fetchall()
+    print("\n=== analysis_reports 테이블 구조 ===")
+    for col in columns:
+        print(col)
+    conn.close()
+
 if __name__ == "__main__":
     check_analysis_reports()
