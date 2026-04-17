@@ -61,6 +61,27 @@ def get_gemini_analysis(ticker, current, context='매수 고려중'):
                 break 
 
     return "[SCORE: 0] 분석 실패"
+def update_portfolio_status(broker, db):
+    # 1. 한국투자증권 API로 잔고 조회
+    balance_data = broker.get_balance() 
+    # balance_data 예시: {'cash': 5000000, 'stocks': [{'ticker': '005930', 'name': '삼성전자', 'qty': 10, 'avg_price': 70000, 'current_price': 72000}, ...]}
+    total_stock_asset = sum(s['qty'] * s['current_price'] for s in balance_data['stocks'])
+    total_asset = balance_data['cash'] + total_stock_asset
+    
+    print(f"--- 계좌 상태 업데이트 ---")
+    print(f"총 자산: {total_asset:,}원 (현금: {balance_data['cash']:,}원 / 주식: {total_stock_asset:,}원)")
+    # 2. DB에 전체 계좌 현황 저장
+    db.save_account_status(total_asset, balance_data['cash'], total_stock_asset)
+    # 3. 종목별 비중 계산 및 저장
+    for s in balance_data['stocks']:
+        amount = s['qty'] * s['current_price']
+        weight = (amount / total_asset) * 100 if total_asset > 0 else 0
+        profit_rate = ((s['current_price'] - s['avg_price']) / s['avg_price']) * 100
+        
+        print(f"-> {s['name']}({s['ticker']}): 비중 {weight:.2f}% / 수익률 {profit_rate:.2f}%")
+        
+        # DB에 종목별 상세 데이터 저장 (Insert or Replace)
+        db.save_portfolio_item(s['ticker'], s['name'], s['qty'], s['avg_price'], s['current_price'], amount, profit_rate, weight)
 def main():
     db = DBManager()
     broker = KisBroker()

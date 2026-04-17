@@ -20,6 +20,27 @@ class DBManager:
         self.conn.execute('''CREATE TABLE IF NOT EXISTS trade_history (
             ticker TEXT, trade_date TEXT, execution_price INTEGER, quantity INTEGER, total_amount INTEGER, msg TEXT)''')
         self.conn.commit()
+        # 현재 보유 종목 및 자산 상태 테이블
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS portfolio (
+            ticker TEXT PRIMARY KEY, 
+            stock_name TEXT,
+            quantity INTEGER,      -- 보유 수량
+            avg_buy_price REAL,    -- 매수 평균가
+            current_price INTEGER, -- 현재가
+            total_amount REAL,     -- 평가 금액 (수량 * 현재가)
+            profit_rate REAL,      -- 수익률
+            weight REAL,           -- 비중 (%)
+            updated_at TEXT        -- 업데이트 시각
+        )''')
+
+        # 계좌 잔고 현황 (예수금 등)
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS account_status (
+            id INTEGER PRIMARY KEY CHECK (id = 1), -- 단일 레코드 유지
+            total_asset REAL,      -- 총 자산 (예수금 + 주식)
+            cash_balance REAL,     # 주문 가능 현금
+            stock_asset REAL,      # 주식 평가 총액
+            updated_at TEXT
+        )''')
 
     def get_price_data(self, ticker):
         # 180일치 데이터 조회
