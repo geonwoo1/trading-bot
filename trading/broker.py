@@ -73,6 +73,11 @@ class KisBroker:
         }
         data = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker, "ORD_QTY": str(qty), "ORD_UNPR": "0", "ORD_DVSN": "01"}
         return requests.post(f"{self.url}/{path}", data=json.dumps(data), headers=headers).json()
+        
+    def sell_market_order(self, ticker, qty):
+            headers = {"authorization": f"Bearer {self.access_token}", "appKey": self.app_key, "appSecret": self.app_secret, "tr_id": API_CONFIG['TR_IDS']['ORDER_CASH']}
+            data = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker, "ORD_QTY": str(qty), "ORD_UNPR": "0", "ORD_DVSN": "02"}
+            return requests.post(f"{self.url}/{API_CONFIG['ENDPOINTS']['ORDER_CASH']}", data=json.dumps(data), headers=headers).json()
 
     def get_balance(self):
         path = API_CONFIG['ENDPOINTS']['INQUIRE_BALANCE']

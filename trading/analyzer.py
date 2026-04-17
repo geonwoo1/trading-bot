@@ -1,116 +1,87 @@
-import sqlite3
-import pandas as pd
-import os
-import time
-from datetime import datetime
+import os, re, time, datetime, logging
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+from db_manager import DBManager
+from broker import KisBroker
+from indicators import calculate_indicators
 
-# 환경변수 로드
-load_dotenv()
+# 로깅 설정: 매매 기록을 파일로도 저장
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.FileHandler("trading.log"), logging.StreamHandler()])
+
+# AI 설정
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# DB 경로 설정 (상위 폴더에 있는 trading.db)
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'trading.db')
+def get_gemini_analysis(ticker, data, context):
+    """AI를 통한 종목 심층 분석 및 매매 결정"""
+    prompt = f"종목: {ticker}, 데이터: {data}, 상황: {context}. [DECISION: BUY/SELL/HOLD], [SCORE: 0~100] 형식으로 답변."
+    for attempt in range(3):
+        try:
+            res = client.models.generate_content(model="gemini-2.0-flash", contents=prompt, config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
+            return res.text
+        except Exception as e:
+            if "503" in str(e): time.sleep(30)
+            elif "429" in str(e): time.sleep(60)
+            else: break
+    return "[DECISION: HOLD][SCORE: 0]"
 
-def calculate_rsi(series, period=14):
-    """표준 RSI 계산 (직접 구현)"""
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    
-    # Wilder's Smoothing 적용
-    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-    
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+def calculate_buy_amount(balance_data, score):
+    """AI 점수에 따른 투자 비중 계산 (리스크 관리)"""
+    cash = balance_data['cash']
+    percent = 0.30 if score >= 95 else (0.20 if score >= 85 else 0.10)
+    return int(cash * percent)
 
-def get_analysis_data(ticker):
-    """DB에서 데이터를 가져와 RSI 계산"""
-    conn = sqlite3.connect(DB_PATH)
-    query = f"SELECT date, close FROM daily_prices WHERE ticker = '{ticker}'"
-    df = pd.read_sql(query, conn)
-    conn.close()
-    
-    if df.empty: return None
-    
-    df['date'] = pd.to_datetime(df['date'], format='mixed')
-    df = df.sort_values('date')
-    df['close'] = pd.to_numeric(df['close'])
-    df['rsi'] = calculate_rsi(df['close'], period=14)
-    
-    return df.iloc[-1] # 마지막 행 데이터
+def update_portfolio_status(broker, db):
+    """실제 계좌와 DB 동기화"""
+    balance = broker.get_balance()
+    total_asset = balance['cash'] + sum(s['qty'] * s['current_price'] for s in balance['stocks'])
+    db.save_account_status(total_asset, balance['cash'], total_asset - balance['cash'])
+    db.clear_portfolio_table()
+    for s in balance['stocks']:
+        db.save_portfolio_item(s['ticker'], s['name'], s['qty'], s['avg_price'], s['current_price'], s['qty']*s['current_price'], 0, 0)
+    logging.info(f"[*] 동기화 완료: 총 자산 {total_asset:,}원")
 
-def get_gemini_analysis(ticker, data):
-    """Gemini API 호출 (뉴스 검색 포함)"""
-    prompt = f"""
-    당신은 10년 차 베테랑 증권사 애널리스트입니다. '{ticker}' 종목을 분석해주세요.
-    - 현재가: {data['close']:,}원
-    - RSI(14): {data['rsi']:.2f}
+def main():
+    db, broker = DBManager(), KisBroker()
+    logging.info(">>> 봇 가동 시작")
     
-    [분석 요청]
-    1. RSI 수치 기반 기술적 판단.
-    2. 최근 1주일간 뉴스 검색 후 종합 투자 의견 제시.
-    3. 최종 점수 [SCORE: 0~100] 명시.
-    """
-    try:
-        config = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.3,
-        )
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=config
-        )
-        return response.text
-    except Exception as e:
-        return f"분석 중 에러 발생: {e}"
+    update_portfolio_status(broker, db)
+    balance = broker.get_balance()
 
-def save_analysis_to_db(ticker, data, report):
-    """분석 결과 저장"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS analysis_reports (
-            ticker TEXT, analysis_date TEXT, close INTEGER, rsi REAL, report TEXT,
-            PRIMARY KEY (ticker, analysis_date)
-        )
-    ''')
-    cursor.execute('''
-        INSERT OR REPLACE INTO analysis_reports (ticker, analysis_date, close, rsi, report)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (ticker, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), int(data['close']), float(data['rsi']), report))
-    conn.commit()
-    conn.close()
+    # 1. 보유 종목 관리 (매도/추가매수)
+    for stock in balance['stocks']:
+        ticker = stock['ticker']
+        logging.info(f"[*] 분석 대상(보유): {stock['name']}({ticker})")
+        df = calculate_indicators(db.get_price_data(ticker))
+        report = get_gemini_analysis(ticker, df.iloc[-1].to_dict(), "보유 종목 매도/홀딩/추가매수 판단")
+        
+        decision = re.search(r'\[DECISION:\s*(.*?)\]', report)
+        score = re.search(r'\[SCORE:\s*(\d+)\]', report)
+        d, s = (decision.group(1).upper() if decision else "HOLD"), (int(score.group(1)) if score else 0)
+        
+        logging.info(f"[*] 결과: {d} (Score: {s})")
+        if d == "SELL" and s >= 70:
+            broker.sell_market_order(ticker, stock['qty'])
+            update_portfolio_status(broker, db)
+        elif d == "BUY" and s >= 85:
+            qty = calculate_buy_amount(balance, s) // stock['current_price']
+            if qty > 0:
+                broker.buy_market_order(ticker, qty)
+                update_portfolio_status(broker, db)
+
+    # 2. 신규 종목 스캔
+    all_tickers = db.get_watchlist()
+    for ticker in [t for t in all_tickers if t not in [s['ticker'] for s in balance['stocks']]]:
+        df = calculate_indicators(db.get_price_data(ticker))
+        if df is not None and df.iloc[-1]['rsi'] < 35:
+            logging.info(f"[*] 분석 대상(신규): {ticker}")
+            report = get_gemini_analysis(ticker, df.iloc[-1].to_dict(), "신규 매수 고려중")
+            score = int(re.search(r'\[SCORE:\s*(\d+)\]', report).group(1)) if re.search(r'\[SCORE:\s*(\d+)\]', report) else 0
+            if "[DECISION: BUY]" in report and score >= 80:
+                qty = calculate_buy_amount(balance, score) // df.iloc[-1]['close']
+                if qty > 0:
+                    broker.buy_market_order(ticker, qty)
+                    update_portfolio_status(broker, db)
+        time.sleep(1)
 
 if __name__ == "__main__":
-    # 1. 대상 종목 가져오기
-    conn = sqlite3.connect(DB_PATH)
-    tickers = [row[0] for row in conn.execute("SELECT Code FROM my_watchlist").fetchall()]
-    conn.close()
-
-    print(f"총 {len(tickers)}개 종목 RSI 계산 시작...")
-    
-    rsi_list = []
-    for ticker in tickers:
-        data = get_analysis_data(ticker)
-        if data is not None and not pd.isna(data['rsi']):
-            rsi_list.append({'ticker': ticker, 'data': data, 'rsi': data['rsi']})
-
-    # 2. 과매도 기준 RSI 낮은 순 상위 10개 추출
-    top_10 = sorted(rsi_list, key=lambda x: x['rsi'])[:10]
-
-    # 3. AI 분석 및 DB 저장
-    print(f"상위 10개 종목 AI 심층 분석 시작...")
-    for item in top_10:
-        print(f"분석 중: {item['ticker']} (RSI: {item['rsi']:.2f})")
-        report = get_gemini_analysis(item['ticker'], item['data'])
-        save_analysis_to_db(item['ticker'], item['data'], report)
-        
-        # API 할당량 보호를 위한 강제 대기 (분당 3회 제한)
-        time.sleep(20) 
-    
-    print("모든 작업이 완료되었습니다.")
+    main()

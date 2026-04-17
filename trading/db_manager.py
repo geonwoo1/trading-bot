@@ -35,11 +35,11 @@ class DBManager:
 
         # 계좌 잔고 현황 (예수금 등)
         self.conn.execute('''CREATE TABLE IF NOT EXISTS account_status (
-            id INTEGER PRIMARY KEY CHECK (id = 1), -- 단일 레코드 유지
-            total_asset REAL,      -- 총 자산 (예수금 + 주식)
-            cash_balance REAL,     # 주문 가능 현금
-            stock_asset REAL,      # 주식 평가 총액
-            updated_at TEXT
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    total_asset REAL,
+                    cash_balance REAL,
+                    stock_asset REAL,
+                    updated_at TEXT
         )''')
 
     def get_price_data(self, ticker):
@@ -70,3 +70,25 @@ class DBManager:
     def get_watchlist(self):
         df = pd.read_sql("SELECT DISTINCT ticker FROM daily_prices", self.conn)
         return df['ticker'].dropna().astype(str).str.zfill(6).tolist()
+
+    def save_account_status(self, total_asset, cash_balance, stock_asset):
+        """계좌 잔고 정보를 DB에 저장 (id가 1인 레코드를 갱신)"""
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.conn.execute('''
+            INSERT OR REPLACE INTO account_status (id, total_asset, cash_balance, stock_asset, updated_at)
+            VALUES (1, ?, ?, ?, ?)
+        ''', (float(total_asset), float(cash_balance), float(stock_asset), now))
+        self.conn.commit()
+    def clear_portfolio_table(self):
+        """포트폴리오 테이블 전체 삭제"""
+        self.conn.execute("DELETE FROM portfolio")
+        self.conn.commit()
+
+    def save_portfolio_item(self, ticker, name, qty, avg, curr, total, profit, weight):
+        """포트폴리오 정보 저장"""
+        self.conn.execute('''
+            INSERT OR REPLACE INTO portfolio 
+            (ticker, stock_name, quantity, avg_buy_price, current_price, total_amount, profit_rate, weight, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (ticker, name, qty, avg, curr, total, profit, weight, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        self.conn.commit()
