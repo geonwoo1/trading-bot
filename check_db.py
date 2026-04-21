@@ -50,7 +50,7 @@ def check_data():
     
     # 3. 특정 종목(예: 삼성전자 005930) 데이터만 뽑아보기
     ticker = '005930'
-    ticker_data = pd.read_sql(f"SELECT * FROM daily_prices WHERE ticker='{ticker}' LIMIT 5;", conn)
+    ticker_data = pd.read_sql(f"SELECT * FROM daily_prices WHERE ticker='{ticker}' ORDER BY date DESC LIMIT 5;", conn)
     print(f"\n=== 삼성전자(005930) 데이터 샘플 ===")
     print(ticker_data)
     
@@ -90,6 +90,69 @@ def check_table_schema():
     for col in columns:
         print(col)
     conn.close()
+def check_recent_data():
+    conn = sqlite3.connect('trading.db')
+    
+    print("\n=== 전체 종목 중 가장 최근 데이터 5개 ===")
+    # 모든 종목을 통틀어 날짜(date) 기준 내림차순으로 5개만 가져옵니다.
+    query = "SELECT * FROM daily_prices order by date desc LIMIT 5;"
+    
+    recent_df = pd.read_sql(query, conn)
+    
+    if not recent_df.empty:
+        print(recent_df)
+    else:
+        print("데이터가 존재하지 않습니다.")
+        
+    conn.close()
+
+import sqlite3
+import os
+
+def clear_daily_prices_fixed():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(base_dir, 'trading.db')
+    
+    conn = sqlite3.connect(db_path)
+    # 기본적으로 sqlite3는 자동 커밋 모드가 아님을 인지해야 합니다.
+    cursor = conn.cursor()
+    try:
+        print("데이터 삭제 중...")
+        # 1. 데이터 삭제
+        cursor.execute("DELETE FROM daily_prices")
+        
+        # 2. 커밋을 먼저 수행하여 트랜잭션을 완전히 종료합니다.
+        conn.commit()
+        print("데이터 삭제 완료 및 트랜잭션 종료.")
+
+        # 3. 트랜잭션 외부에서 VACUUM 실행
+        # (sqlite3 모듈의 기본 격리 수준 때문에 isolation_level을 None으로 잠시 설정)
+        old_isolation_level = conn.isolation_level
+        conn.isolation_level = None 
+        conn.execute("VACUUM")
+        conn.isolation_level = old_isolation_level
+        
+        print("DB 용량 최적화(VACUUM) 완료.")
+        
+    except Exception as e:
+        print(f"오류 발생: {e}")
+    finally:
+        conn.close()
+
+def reset_daily_prices():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(base_dir, 'trading.db')
+    """기존 가격 테이블을 완전히 삭제하고 초기화하는 함수"""
+    confirm = input("[주의] 기존 모든 가격 데이터를 삭제하시겠습니까? (y/n): ")
+    if confirm.lower() == 'y':
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS daily_price")
+        conn.commit()
+        conn.close()
+        print("[!] daily_price 테이블이 초기화되었습니다.")
+    else:
+        print("[*] 초기화를 취소합니다.")
 
 if __name__ == "__main__":
-    check_analysis_reports()
+    reset_daily_prices()

@@ -13,27 +13,32 @@ class DBManager:
         self._create_tables()
 
     def _create_tables(self):
-        # 분석 리포트와 거래 기록 테이블 생성
+        # 모든 실행을 self.conn.execute로 통일하면 cursor 정의 순서 리스크를 줄일 수 있네.
+        
+        # 1. 분석 리포트 및 거래 기록
         self.conn.execute('''CREATE TABLE IF NOT EXISTS analysis_reports (
-            ticker TEXT, analysis_date TEXT, close INTEGER, rsi REAL, score INTEGER, report TEXT)''')
+            ticker TEXT, analysis_date TEXT, close INTEGER, rsi REAL, score INTEGER, report TEXT,
+            PRIMARY KEY (ticker, analysis_date))''')
         
         self.conn.execute('''CREATE TABLE IF NOT EXISTS trade_history (
             ticker TEXT, trade_date TEXT, execution_price INTEGER, quantity INTEGER, total_amount INTEGER, msg TEXT)''')
-        self.conn.commit()
-        # 현재 보유 종목 및 자산 상태 테이블
-        self.conn.execute('''CREATE TABLE IF NOT EXISTS portfolio (
-            ticker TEXT PRIMARY KEY, 
-            stock_name TEXT,
-            quantity INTEGER,      -- 보유 수량
-            avg_buy_price REAL,    -- 매수 평균가
-            current_price INTEGER, -- 현재가
-            total_amount REAL,     -- 평가 금액 (수량 * 현재가)
-            profit_rate REAL,      -- 수익률
-            weight REAL,           -- 비중 (%)
-            updated_at TEXT        -- 업데이트 시각
-        )''')
 
-        # 계좌 잔고 현황 (예수금 등)
+        # 2. 포트폴리오 (이제 stock_name이 확실히 들어갔군!)
+        self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS portfolio (
+                ticker TEXT PRIMARY KEY,
+                stock_name TEXT,
+                quantity INTEGER,
+                avg_buy_price INTEGER,
+                current_price INTEGER,
+                total_amount INTEGER,
+                profit_rate REAL,
+                weight REAL,
+                updated_at TEXT
+            )
+        ''')
+
+        # 3. 계좌 상태
         self.conn.execute('''CREATE TABLE IF NOT EXISTS account_status (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     total_asset REAL,
@@ -41,12 +46,24 @@ class DBManager:
                     stock_asset REAL,
                     updated_at TEXT
         )''')
+        
+        self.conn.commit()
 
     def get_price_data(self, ticker):
-        # 180일치 데이터 조회
-        query = f"SELECT * FROM daily_prices WHERE ticker = '{ticker}' ORDER BY date DESC LIMIT 180"
-        df = pd.read_sql(query, self.conn)
-        return df.sort_values('date') if not df.empty else None
+        """최근 180일치 데이터 조회 (비어있을 경우 빈 DataFrame 반환)"""
+
+        query = "SELECT * FROM daily_prices WHERE ticker = ? ORDER BY date DESC LIMIT 180"
+        
+        try:
+            df = pd.read_sql(query, self.conn, params=(ticker,))
+            if df.empty:
+                print(f"[!] DB에 {ticker} 데이터가 없습니다.")
+                return pd.DataFrame() # None 대신 빈 객체 반환
+            
+            return df.sort_values('date')
+        except Exception as e:
+            print(f"[!] DB 조회 중 오류 발생: {e}")
+            return pd.DataFrame()
 
     def save_daily_data(self, df):
         # 새로운 데이터 append

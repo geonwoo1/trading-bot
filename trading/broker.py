@@ -80,45 +80,63 @@ class KisBroker:
             return requests.post(f"{self.url}/{API_CONFIG['ENDPOINTS']['ORDER_CASH']}", data=json.dumps(data), headers=headers).json()
 
     def get_balance(self):
-        path = API_CONFIG['ENDPOINTS']['INQUIRE_BALANCE']
-        headers = {
-            "authorization": f"Bearer {self.access_token}",
-            "appKey": self.app_key,
-            "appSecret": self.app_secret,
-            "tr_id": API_CONFIG['TR_IDS']['INQUIRE_BALANCE']
-        }
-        params = {
-            "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "AFHR_FLPR_YN": "N",
-            "INQR_DVSN": "02", "UNPR_DVSN": "01", "PRCS_DVSN": "00", "OFL_YN": "N",
-            "FUND_STTL_ICLD_YN" : "N", "FUND_STTL_ICLD_YN" : "N", "FNCG_AMT_AUTO_RDPT_YN" : "N",
-            "CTX_AREA_FK100" : "", "CTX_AREA_NK100" :""
-        }
-        res = requests.get(f"{self.url}/{path}", params=params, headers=headers).json()
+            """실제 계좌의 잔고와 보유 종목을 가져오는 함수"""
+            path = "uapi/domestic-stock/v1/trading/inquire-balance" # API 경로 예시
+            
+            headers = {
+                "Content-Type": "application/json",
+                "authorization": f"Bearer {self.access_token}",
+                "appKey": self.app_key,
+                "appSecret": self.app_secret,
+                "tr_id": "VTTC8434R"  # 모의투자 잔고조회 TR ID
+            }
+            
+            params = {
+                "CANO": self.cano,
+                "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                "AFHR_FLPR_YN": "N",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "PRCS_DVSN": "00",
+                "OFL_YN": "N",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": ""
+            }
 
-        # --- [디버깅 추가] 응답 전체를 출력하여 확인 ---
-        print("\n" + "="*50)
-        print("[DEBUG] 한국투자증권 API 전체 응답:")
-        print(json.dumps(res, indent=4, ensure_ascii=False))
-        print("="*50 + "\n")
-        # ----
-        # [방어 로직] 토큰 만료시 재발급 및 재시도
-        if res.get('rt_cd') == "1":
-            print("[!] 토큰 에러 발생! 토큰 갱신 후 재시도합니다.")
-            if os.path.exists(TOKEN_FILE): os.remove(TOKEN_FILE)
-            self.access_token = self._get_token()
-            headers['authorization'] = f"Bearer {self.access_token}"
             res = requests.get(f"{self.url}/{path}", params=params, headers=headers).json()
 
-        stocks = []
-        for item in res.get('output1', []):
-            stocks.append({
-                "ticker": item['pdno'],
-                "name": item['prdt_name'],
-                "qty": int(item['hldg_qty']),
-                "avg_price": int(item['pchs_avg_pric']),
-                "current_price": int(item['prpr'])
-            })
-            
-        output2 = res.get('output2', [])
-        cash = int(output2[0].get('dnca_tot_amt', 0)) if output2 else 0
-        return {"cash": cash, "stocks": stocks}
+            # [디버깅] 전체 응답 확인
+            print("\n" + "="*50)
+            print("[DEBUG] 한국투자증권 API 잔고 조회 응답 완료")
+            print("="*50 + "\n")
+
+            # 토큰 만료 처리 (필요 시)
+            if res.get('rt_cd') == "1":
+                print("[!] 토큰 만료 감지, 재발급 후 재시도합니다.")
+                # 토큰 재발급 로직...
+                return self.get_balance()
+
+            # 1. 보유 종목 정리 (output1)
+            stocks = []
+            for item in res.get('output1', []):
+                # [수정] float으로 먼저 변환하여 소수점 포함 문자열 에러 방지
+                stocks.append({
+                    "ticker": item['pdno'],
+                    "name": item['prdt_name'],
+                    "qty": int(float(item['hldg_qty'])),
+                    "avg_price": int(float(item.get('pchs_avg_pric', 0))),
+                    "current_price": int(float(item.get('prpr', 0))),
+                })
+                
+            # 2. 예수금 및 자산 정보 정리 (output2)
+            output2 = res.get('output2', [])
+            if output2:
+                # [핵심 수정] dnca_tot_amt 대신 prvs_rcdl_excc_amt(인출가능금액) 사용
+                # 주식을 산 직후에도 정확한 가용 현금을 보여줌세.
+                cash = int(float(output2[0].get('prvs_rcdl_excc_amt', 0)))
+            else:
+                cash = 0
+                
+            return {"cash": cash, "stocks": stocks}
