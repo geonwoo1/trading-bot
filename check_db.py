@@ -155,4 +155,4 @@ def reset_daily_prices():
         print("[*] 초기화를 취소합니다.")
 
 if __name__ == "__main__":
-    reset_daily_prices()
+    check_data()

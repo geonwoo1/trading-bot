@@ -77,11 +77,17 @@ class DBManager:
         ''', (ticker, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
             int(data['close']), float(data['rsi']), int(score), report))
         self.conn.commit()
-
-    def save_trade(self, ticker, price, qty, msg):
-        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.conn.execute('''INSERT INTO trade_history VALUES (?, ?, ?, ?, ?, ?)''',
-                          (ticker, now, int(price), int(qty), int(price * qty), msg))
+        
+    def save_trade(self, ticker, msg, qty, price, date_obj=None):
+        """거래 기록 저장 (main.py의 호출 규격 5개 인자에 대응)"""
+        if date_obj is None:
+            date_obj = datetime.datetime.now()
+        
+        trade_date = date_obj.strftime('%Y-%m-%d %H:%M:%S')
+        self.conn.execute('''
+            INSERT INTO trade_history (ticker, trade_date, execution_price, quantity, total_amount, msg)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (ticker, trade_date, int(price), int(qty), int(price * qty), msg))
         self.conn.commit()
 
     def get_watchlist(self):
@@ -109,3 +115,15 @@ class DBManager:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (ticker, name, qty, avg, curr, total, profit, weight, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         self.conn.commit()
+    def get_last_buy_date(self, ticker):
+        """특정 종목의 마지막 매수일 조회 (main.py 42행 대응)"""
+        query = """
+            SELECT trade_date FROM trade_history 
+            WHERE ticker = ? AND (msg = 'BUY' OR msg = '초반 매수') 
+            ORDER BY trade_date DESC LIMIT 1
+        """
+        cursor = self.conn.execute(query, (ticker,))
+        row = cursor.fetchone()
+        if row:
+            return datetime.datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
+        return None

@@ -33,7 +33,7 @@ class KisBroker:
         print("[*] 새 토큰 발급 중...")
         url = f"{self.url}{API_CONFIG['ENDPOINTS']['TOKEN']}"
         body = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
-        res = requests.post(url, data=json.dumps(body))
+        res = requests.post(url, data=json.dumps(body), verify=False)
         new_token = res.json().get('access_token')
 
         # 3. 발급 시간과 함께 파일에 저장
@@ -88,7 +88,7 @@ class KisBroker:
                 "authorization": f"Bearer {self.access_token}",
                 "appKey": self.app_key,
                 "appSecret": self.app_secret,
-                "tr_id": "VTTC8434R"  # 모의투자 잔고조회 TR ID
+                "tr_id": API_CONFIG['TR_IDS']['INQUIRE_BALANCE']  # 모의투자 잔고조회 TR ID
             }
             
             params = {
@@ -105,7 +105,7 @@ class KisBroker:
                 "CTX_AREA_NK100": ""
             }
 
-            res = requests.get(f"{self.url}/{path}", params=params, headers=headers).json()
+            res = requests.get(f"{self.url}/{path}", params=params, headers=headers, verify=False).json()
 
             # [디버깅] 전체 응답 확인
             print("\n" + "="*50)
