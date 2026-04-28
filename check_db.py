@@ -41,7 +41,7 @@ def check_data():
     
     # 1. 일봉 데이터 테이블 상위 10개 조회
     print("=== daily_prices 테이블 데이터 샘플 (상위 10개) ===")
-    df_sample = pd.read_sql("SELECT * FROM daily_prices LIMIT 10;", conn)
+    df_sample = pd.read_sql("SELECT * FROM daily_prices LIMIT 100;", conn)
     print(df_sample)
     
     # 2. 데이터가 총 몇 개 들어갔는지 확인
@@ -119,7 +119,7 @@ def clear_daily_prices_fixed():
     try:
         print("데이터 삭제 중...")
         # 1. 데이터 삭제
-        cursor.execute("DELETE FROM daily_prices")
+        cursor.execute("DELETE FROM daily_price")
         
         # 2. 커밋을 먼저 수행하여 트랜잭션을 완전히 종료합니다.
         conn.commit()
@@ -153,6 +153,44 @@ def reset_daily_prices():
         print("[!] daily_price 테이블이 초기화되었습니다.")
     else:
         print("[*] 초기화를 취소합니다.")
+def reset_daily_prices_and_schema():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(base_dir, 'trading.db')
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        print("기존 테이블 구조 삭제 및 초기화 중...")
+        
+        # 1. 기존 테이블(daily_prices)을 완전히 삭제 (구조를 새로 잡기 위함)
+        cursor.execute("DROP TABLE IF EXISTS daily_prices")
+        conn.commit()
 
+        # 2. VACUUM 실행 (트랜잭션 밖에서 실행하기 위해 격리 수준 조정)
+        old_iso = conn.isolation_level
+        conn.isolation_level = None
+        conn.execute("VACUUM")
+        conn.isolation_level = old_iso
+        print("DB 용량 최적화 완료.")
+
+        # 3. 새로운 스카마(name 컬럼 포함)로 테이블 재생성
+        cursor.execute('''
+            CREATE TABLE daily_prices (
+                ticker TEXT,
+                name TEXT,        -- 드디어 추가된 name 컬럼
+                date TEXT,
+                close INTEGER,
+                volume INTEGER,
+                PRIMARY KEY (ticker, date)
+            )
+        ''')
+        cursor.execute("CREATE INDEX idx_ticker_date ON daily_prices (ticker, date)")
+        conn.commit()
+        print("새로운 daily_prices 테이블 생성 완료 (name 컬럼 포함).")
+        
+    except Exception as e:
+        print(f"오류 발생: {e}")
+    finally:
+        conn.close()
 if __name__ == "__main__":
-    check_data()
+    check_recent_data()

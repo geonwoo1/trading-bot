@@ -16,7 +16,7 @@ HOLD_DAYS_LIMIT = 3
 TAKE_PROFIT_PARTIAL = 0.05
 
 RSI_BUY = 40
-MIN_AI_SCORE = 65
+MIN_AI_SCORE = 70
 MAX_AI_ANALYZE = 10
 
 # ==============================
@@ -56,6 +56,7 @@ def get_ai_score_and_reason(ticker, data):
     prompt = f"""
     너는 15년차 수석 투자 애널리스트이며, 초기 상승 신호를 포착하는 트레이딩 전문가다.
     완벽한 확정보다 '선반영 가능성'과 '수급 변화'를 더 중요하게 평가한다.
+    그리고 수익이 2~3일 내로 날 것 같은 종목들을 우선 추천하고 매도 가격까지 추천해줘. 
 
     [분석 대상]
     - 종목: {stock_name} ({ticker})
@@ -88,10 +89,12 @@ def get_ai_score_and_reason(ticker, data):
     [NEWS: 뉴스/이벤트 분석 내용과 점수 (점수/30)(40자 이내)]
     [THEME: 테마/섹터 수급 분석 이유와 점수 (점수/30)(40자 이내)]
     [REASON: 위 항목들을 종합한 최종 매수/매도 근거 (100자 이내)]
+    [SELL: 추천 매도 가격]
     """
     try:
         # 모델명은 실제 사용하는 환경에 맞게 조정 (예: gemini-2.0-flash)
-        res = client.models.generate_content(model="gemma-4-31b-it", contents=prompt)
+        # gemma-4-31b-it
+        res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
         text = res.text
         
         score_match = re.search(r'\[SCORE:\s*(\d+)\]', text)
@@ -99,18 +102,21 @@ def get_ai_score_and_reason(ticker, data):
         news_match = re.search(r'\[NEWS:\s*(.*?)\]', text)
         theme_match = re.search(r'\[THEME:\s*(.*?)\]', text)
         reason_match = re.search(r'\[REASON:\s*(.*?)\]', text)
+        sell_match = re.search(r'\[SELL:\s*(.*?)\]', text)
 
         score = int(score_match.group(1)) if score_match else 50
         tech_result = tech_match.group(1).strip() if tech_match else "데이터 부족"
         news_result = news_match.group(1).strip() if news_match else "재료 확인 불가"
         theme_result = theme_match.group(1).strip() if theme_match else "수급 파악 불가"
         final_reason = reason_match.group(1).strip() if reason_match else "종합 판단 근거 누락"
+        sell = sell_match.group(1).strip() if sell_match else "매도 가격 설정 불가"
 
         print(f" 완료! (종합 점수: {score}점)")
         print(f"     ├─ [차트 분석]: {tech_result}")
         print(f"     ├─ [뉴스 분석]: {news_result}")
         print(f"     ├─ [테마 분석]: {theme_result}")
         print(f"     └─ [종합 판단]: {final_reason}")
+        print(f"     └─ [추천 매도가격]: {sell}")
 
         return score, final_reason
 
@@ -149,8 +155,10 @@ def main():
         ticker, name, qty, avg = stock['ticker'], stock['name'], stock['qty'], stock['avg_price']
 
         df = calculate_indicators(db.get_price_data(ticker))
+        row = df.iloc[-1]
         if df is None or df.empty:
             continue
+        score, reason = get_ai_score_and_reason(ticker, row.to_dict())
 
         row = df.iloc[-1]
         price = row['close']
